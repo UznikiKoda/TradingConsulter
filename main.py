@@ -25,6 +25,8 @@ def get_tickers():
     return tickers
 
 
+#todo: Настройки и построение графиков засунуть в отдельный def (в отдельный класс - файл)
+
 class Indicators:
     def __init__(self, ticker, date, interval='day', days=365, balance=10 ** 5, comission=False):
         if interval == 'day':
@@ -47,20 +49,6 @@ class Indicators:
         self.df = add_all_ta_features(self.df, open="<OPEN>", high="<HIGH>", low="<LOW>", close="<CLOSE>",
                                       volume="<VOL>", fillna=True)
 
-    def plot_candles(self):
-        plt.figure(figsize=(40, 15), facecolor='#d8dcd6')
-        ax = plt.subplot2grid((8, 1), (0, 0), rowspan=5, colspan=1)
-
-        candlestick_ohlc(ax, np.array(self.df[["<DATE_1>", "<OPEN>", "<HIGH>", "<LOW>", "<CLOSE>"]]), width=0.5,
-                         colorup='r', colordown='green')
-
-        ax.set_title('Candles')
-        ax.xaxis_date()
-        ax.set_ylabel('price')
-        ax.grid(True)
-        ax.set_facecolor('#d8dcd6')
-        ax.set_xlabel('time')
-
     def macd_aroon(self, window_fast=11, window_slow=27, window_sign=9, lb=25, plot=True):
         _MACD = MACD(self.df["<CLOSE>"], window_fast=11, window_slow=27, window_sign=9)
         self.df["MACD"] = _MACD.macd()
@@ -76,7 +64,6 @@ class Indicators:
 
             ax1.plot(self.df['<DATE>'], self.df['MACD_signal'], label='Signal line')
             ax1.plot(self.df['<DATE>'], self.df['MACD'], label='MACD line')
-
             for i in range(len(self.df)):
                 if str(self.df['MACD_gist'][i])[0] == '-':
                     ax1.bar(self.df['<DATE>'][i], self.df['MACD_gist'][i], color='#ef5350', )
@@ -730,7 +717,7 @@ class Indicators:
         else:
             rec_move = 'Удерживать'
         print(f"Рекоммендуемое действие: {rec_move}")
-
+        plt.savefig('best_solution', dpi = 100)
         return profitabilities.style.map(colormap)
 
 
