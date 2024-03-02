@@ -25,10 +25,9 @@ def get_tickers():
     return tickers
 
 
-#todo: Настройки и построение графиков засунуть в отдельный def (в отдельный класс - файл)
-
 class Indicators:
-    def __init__(self, ticker, date, interval='day', days=365, balance=10 ** 5, comission=False):
+    def __init__(self, ticker, date, interval='day', days=365, balance=10 ** 5,
+                 comission=False):
         if interval == 'day':
             self.interval = 24
         elif interval == 'minute':
@@ -42,53 +41,24 @@ class Indicators:
 
         self.comission = comission
         self.df = pd.DataFrame(data)
-        self.df.columns = ['<DATE>', '<OPEN>', '<CLOSE>', '<HIGH>', '<LOW>', '<VOL>']
+        self.df.columns = ['<DATE>', '<OPEN>', '<CLOSE>', '<HIGH>', '<LOW>', '<VALUE>', '<VOL>']
         self.balance = balance
         self.df["<VOL>"] = pd.to_numeric(self.df["<VOL>"], errors='coerce')
         self.df["<VOL>"] = self.df["<VOL>"].fillna(0)
         self.df = add_all_ta_features(self.df, open="<OPEN>", high="<HIGH>", low="<LOW>", close="<CLOSE>",
                                       volume="<VOL>", fillna=True)
+        self.df['Buy_Signal'] = False
+        self.df['Sell_Signal'] = False
 
     def macd_aroon(self, window_fast=11, window_slow=27, window_sign=9, lb=25, plot=True):
-        _MACD = MACD(self.df["<CLOSE>"], window_fast=11, window_slow=27, window_sign=9)
+        _MACD = MACD(self.df["<CLOSE>"], window_fast=window_fast, window_slow=window_slow, window_sign=window_sign)
         self.df["MACD"] = _MACD.macd()
         self.df["MACD_signal"] = _MACD.macd_signal()
         self.df["MACD_gist"] = _MACD.macd_diff()
         self.df['AROONu'] = 100 * self.df['<HIGH>'].rolling(lb + 1).apply(lambda x: x.argmax()) / lb
         self.df['AROONd'] = 100 * self.df['<LOW>'].rolling(lb + 1).apply(lambda x: x.argmin()) / lb
 
-        if plot:
-            plt.figure(figsize=(40, 15), facecolor='#d8dcd6')
-            ax1 = plt.subplot2grid((8, 1), (0, 0), rowspan=5, colspan=1)
-            ax2 = plt.subplot2grid((8, 1), (5, 0), rowspan=3, colspan=1)
-
-            ax1.plot(self.df['<DATE>'], self.df['MACD_signal'], label='Signal line')
-            ax1.plot(self.df['<DATE>'], self.df['MACD'], label='MACD line')
-            for i in range(len(self.df)):
-                if str(self.df['MACD_gist'][i])[0] == '-':
-                    ax1.bar(self.df['<DATE>'][i], self.df['MACD_gist'][i], color='#ef5350', )
-                else:
-                    ax1.bar(self.df['<DATE>'][i], self.df['MACD_gist'][i], color='#26a69a')
-
-            ax2.plot(self.df['<DATE>'], self.df['AROONu'], label='AROON Up Channel')
-            ax2.plot(self.df['<DATE>'], self.df['AROONd'], label='AROON Down Channel')
-
-            ax1.set_title('MACD + Aroon')
-            ax1.legend(loc='best')
-            ax2.legend(loc='best')
-
-            ax1.grid(True)
-            ax2.grid(True)
-
-            ax1.set_facecolor('#d8dcd6')
-            ax2.set_facecolor('#d8dcd6')
-
-            fig, ax = plt.subplots(facecolor="#d8dcd6", figsize=(40, 15))
-            plt.plot(self.df['<DATE>'], self.df["<CLOSE>"])
-            ax.set_facecolor('#d8dcd6')
-            ax.grid(True)
-
-        MACD_AROON = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
+        macd_aroon_df = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
         balance = self.balance
         price = 0
         count = 0
@@ -96,35 +66,27 @@ class Indicators:
         balance_df, count_df, price_df, day_status = [], [], [], []
 
         for i in range(len(self.df)):
-            # Определение тренда
-            if self.df['AROONd'][i] <= 30 and self.df['AROONu'][i] >= 60:
-                trend = 'up'
-            elif self.df['AROONu'][i] <= 30 and self.df['AROONd'][i] >= 60:
-                trend = 'down'
-            else:
-                trend = None
+            action = self.check_conditions_macd_aroon(i, balance, count) if i != 0 else 'nothing'
+            match action:
+                case 'buy':
+                    num = balance // self.df['<CLOSE>'][i]
+                    count += balance // self.df['<CLOSE>'][i]
+                    price = self.df['<CLOSE>'][i] * num
+                    balance = balance - price
+                    k += price * 0.01
+                    day_status.append('buy')
+                    self.df.at[i, 'Buy_Signal'] = True
 
-            if balance >= self.df['<CLOSE>'][i] and self.df['MACD_gist'][i] > 0 and trend == 'up':
-                num = balance // self.df['<CLOSE>'][i]
-                count += balance // self.df['<CLOSE>'][i]
-                price = self.df['<CLOSE>'][i] * num
-                balance = balance - price
-                k += price * 0.01
-                day_status.append('buy')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='green', s=78)
+                case 'sell':
+                    balance += count * self.df['<CLOSE>'][i]
+                    k += count * self.df['<CLOSE>'][i] * 0.01
+                    count = 0
+                    price = self.df['<CLOSE>'][i]
+                    day_status.append('sell')
+                    self.df.at[i, 'Sell_Signal'] = True
 
-            elif count > 0 and self.df['MACD_gist'][i] < 0 and trend == 'down':
-                balance += count * self.df['<CLOSE>'][i]
-                k += count * self.df['<CLOSE>'][i] * 0.01
-                count = 0
-                price = self.df['<CLOSE>'][i]
-                day_status.append('sell')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='red', s=78)
-
-            else:
-                day_status.append('nothing')
+                case 'nothing':
+                    day_status.append('nothing')
 
             if i == (len(self.df) - 1):
                 if self.comission:
@@ -140,12 +102,70 @@ class Indicators:
             balance_df.append(balance)
             price_df.append(price)
 
-        MACD_AROON["NumOfShares"] = count_df
-        MACD_AROON["MoneySpent"] = price_df
-        MACD_AROON["Balance"] = balance_df
-        MACD_AROON["DayStatus"] = day_status
-        curr_move = MACD_AROON['DayStatus'].values[-1]
-        return MACD_AROON
+        macd_aroon_df["NumOfShares"] = count_df
+        macd_aroon_df["MoneySpent"] = price_df
+        macd_aroon_df["Balance"] = balance_df
+        macd_aroon_df["DayStatus"] = day_status
+
+        if plot:
+            subplots_data = [
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'black'}
+                    ],
+                    'title': 'Цены закрытия акций',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#f0f0f0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['MACD_signal'], 'label': 'Signal line', 'color': 'blue'},
+                        {'x': self.df['<DATE>'], 'y': self.df['MACD'], 'label': 'MACD line', 'color': 'orange'}
+                    ],
+                    'bar': [
+                        {'x': self.df['<DATE>'], 'y': self.df['MACD_gist'], 'label': 'MACD Histogram',
+                         'color': self.df['MACD_gist'].apply(lambda x: '#ef5350' if x < 0 else '#26a69a')}
+                    ],
+                    'title': 'Индикатор MACD',
+                    'xlabel': 'Дата',
+                    'ylabel': 'MACD',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['AROONu'], 'label': 'AROON Up Channel', 'color': 'blue'},
+                        {'x': self.df['<DATE>'], 'y': self.df['AROONd'], 'label': 'AROON Down Channel', 'color': 'orange'}
+                    ],
+                    'title': 'Индикатор AROON',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Stochastic',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'blue'}
+                    ],
+                    'scatter': [
+                        {'x': self.df[self.df['Buy_Signal']].index, 'y': self.df[self.df['Buy_Signal']]['<CLOSE>'],
+                         'label': 'Покупка', 'color': 'green', 'size': 100},
+                        {'x': self.df[self.df['Sell_Signal']].index, 'y': self.df[self.df['Sell_Signal']]['<CLOSE>'],
+                         'label': 'Продажа', 'color': 'red', 'size': 100}
+                    ],
+                    'title': 'Торговые сигналы на основе MACD + AROON',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                }
+            ]
+
+            plot_data_with_subplots(subplots_data)
+
+        return macd_aroon_df
 
     def atr_aroon(self, window=14, lb=25, plot=True):
         self.df['AROONu'] = 100 * self.df['<HIGH>'].rolling(lb + 1).apply(lambda x: x.argmax()) / lb
@@ -158,34 +178,7 @@ class Indicators:
         self.df['ATR'] = true_range.rolling(window).sum() / window
         self.df["SMAATR"] = SMAIndicator(close=self.df["ATR"], window=14).sma_indicator()
 
-        if plot:
-            plt.figure(figsize=(40, 15), facecolor='#d8dcd6')
-            ax1 = plt.subplot2grid((8, 1), (0, 0), rowspan=5, colspan=1)
-            ax2 = plt.subplot2grid((8, 1), (5, 0), rowspan=3, colspan=1)
-
-            ax1.plot(self.df['<DATE>'], self.df['ATR'], label='ATR')
-            ax1.plot(self.df['<DATE>'], self.df['SMAATR'], label='SMA for ATR')
-
-            ax2.plot(self.df['<DATE>'], self.df['AROONu'], label='AROON Up Channel')
-            ax2.plot(self.df['<DATE>'], self.df['AROONd'], label='AROON Down Channel')
-
-            ax1.set_title('ATR + Aroon')
-            ax1.legend(loc='best')
-            ax2.legend(loc='best')
-
-            ax1.grid(True)
-            ax2.grid(True)
-
-            ax1.set_facecolor('#d8dcd6')
-            ax2.set_facecolor('#d8dcd6')
-
-            fig, ax = plt.subplots(facecolor="#d8dcd6", figsize=(40, 15))
-            plt.plot(self.df['<DATE>'], self.df["<CLOSE>"])
-
-            ax.set_facecolor('#d8dcd6')
-            ax.grid(True)
-
-        ATR_AROON = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
+        atr_aroon_df = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
         balance = self.balance
         price = 0
         count = 0
@@ -193,36 +186,27 @@ class Indicators:
         balance_df, count_df, price_df, day_status = [], [], [], []
 
         for i in range(len(self.df)):
-            # Определение тренда
-            if self.df['AROONd'][i] <= 30 and self.df['AROONu'][i] >= 60:
-                trend = 'up'
-            elif self.df['AROONu'][i] <= 30 and self.df['AROONd'][i] >= 60:
-                trend = 'down'
-            else:
-                trend = None
+            action = self.check_conditions_atr_aroon(i, balance, count) if i != 0 else 'nothing'
+            match action:
+                case 'buy':
+                    num = balance // self.df['<CLOSE>'][i]
+                    count += balance // self.df['<CLOSE>'][i]
+                    price = self.df['<CLOSE>'][i] * num
+                    balance = balance - price
+                    k += price * 0.01
+                    day_status.append('buy')
+                    self.df.at[i, 'Buy_Signal'] = True
 
-            if balance >= self.df['<CLOSE>'][i] and (self.df["ATR"][i] >= self.df["SMAATR"][i]) and trend == 'down':
-                num = balance // self.df['<CLOSE>'][i]
-                count += balance // self.df['<CLOSE>'][i]
-                price = self.df['<CLOSE>'][i] * num
-                balance = balance - price
-                k += price * 0.01
-                day_status.append('buy')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='green', s=78)
+                case 'sell':
+                    balance += count * self.df['<CLOSE>'][i]
+                    k += count * self.df['<CLOSE>'][i] * 0.01
+                    count = 0
+                    price = self.df['<CLOSE>'][i]
+                    day_status.append('sell')
+                    self.df.at[i, 'Sell_Signal'] = True
 
-            elif count > 0 and (self.df["ATR"][i] >= self.df["SMAATR"][i]) and (
-                    self.df["ATR"][i - 1] < self.df["SMAATR"][i - 1]) and trend == 'up':
-                balance += count * self.df['<CLOSE>'][i]
-                k += count * self.df['<CLOSE>'][i] * 0.01
-                count = 0
-                price = self.df['<CLOSE>'][i]
-                day_status.append('sell')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='red', s=78)
-
-            else:
-                day_status.append('nothing')
+                case 'nothing':
+                    day_status.append('nothing')
 
             if i == (len(self.df) - 1):
                 if self.comission:
@@ -238,43 +222,75 @@ class Indicators:
             balance_df.append(balance)
             price_df.append(price)
 
-        ATR_AROON["NumOfShares"] = count_df
-        ATR_AROON["MoneySpent"] = price_df
-        ATR_AROON["Balance"] = balance_df
-        ATR_AROON["DayStatus"] = day_status
+        atr_aroon_df["NumOfShares"] = count_df
+        atr_aroon_df["MoneySpent"] = price_df
+        atr_aroon_df["Balance"] = balance_df
+        atr_aroon_df["DayStatus"] = day_status
 
-        return ATR_AROON
+        if plot:
+            subplots_data = [
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'black'}
+                    ],
+                    'title': 'Цены закрытия акций',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#f0f0f0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['ATR'], 'label': 'ATR', 'color': 'blue'},
+                        {'x': self.df['<DATE>'], 'y': self.df['SMAATR'], 'label': 'SMA for ATR', 'color': 'orange'}
+                    ],
+                    'title': 'Индикатор ATR',
+                    'xlabel': 'Дата',
+                    'ylabel': 'IVAR',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['AROONu'], 'label': 'AROON Up Channel', 'color': 'red'},
+                        {'x': self.df['<DATE>'], 'y': self.df['AROONd'], 'label': 'AROON Down Channel', 'color': 'red'}
+                    ],
+                    'title': 'Индикатор AROON',
+                    'xlabel': 'Дата',
+                    'ylabel': 'IVAR',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'blue'}
+                    ],
+                    'scatter': [
+                        {'x': self.df[self.df['Buy_Signal']].index, 'y': self.df[self.df['Buy_Signal']]['<CLOSE>'],
+                         'label': 'Покупка', 'color': 'green', 'size': 100},
+                        {'x': self.df[self.df['Sell_Signal']].index, 'y': self.df[self.df['Sell_Signal']]['<CLOSE>'],
+                         'label': 'Продажа', 'color': 'red', 'size': 100}
+                    ],
+                    'title': 'Торговые сигналы на основе ATR + AROON',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                }
+            ]
 
-    def bolinger_bands(self, window=20, window_dev=2, plot=True):
-        indicator_bb = BollingerBands(close=self.df["<CLOSE>"], window=20, window_dev=2)
+            plot_data_with_subplots(subplots_data)
+
+        return atr_aroon_df
+
+    def bollinger_bands(self, window=20, window_dev=2, plot=True):
+        indicator_bb = BollingerBands(close=self.df["<CLOSE>"], window=window, window_dev=window_dev)
         self.df['bb_bbm'] = indicator_bb.bollinger_mavg()
         self.df['bb_bbh'] = indicator_bb.bollinger_hband()
         self.df['bb_bbl'] = indicator_bb.bollinger_lband()
         self.df["SMA"] = SMAIndicator(close=self.df["<CLOSE>"], window=2).sma_indicator()
-        if plot:
-            plt.figure(figsize=(40, 15), facecolor='#d8dcd6')
-            ax1 = plt.subplot2grid((8, 1), (0, 0), rowspan=5, colspan=1)
 
-            ax1.plot(self.df['<DATE>'], self.df['<CLOSE>'], label='Close', color='black')
-            ax1.plot(self.df['<DATE>'], self.df['bb_bbm'], label='BB Middle')
-            ax1.plot(self.df['<DATE>'], self.df['bb_bbh'], label='BB High')
-            ax1.plot(self.df['<DATE>'], self.df['bb_bbl'], label='BB Low')
-            ax1.plot(self.df['<DATE>'], self.df['SMA'], label='SMA', color='#a00498')
-
-            ax1.set_title('BB')
-            ax1.legend(loc='best')
-
-            ax1.grid(True)
-
-            ax1.set_facecolor('#d8dcd6')
-
-            fig, ax = plt.subplots(facecolor="#d8dcd6", figsize=(40, 15))
-            plt.plot(self.df['<DATE>'], self.df["<CLOSE>"])
-
-            ax.set_facecolor('#d8dcd6')
-            ax.grid(True)
-
-        BB = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
+        bb_df = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
         balance = self.balance
         price = 0
         count = 0
@@ -282,29 +298,26 @@ class Indicators:
         balance_df, count_df, price_df, day_status = [], [], [], []
 
         for i in range(len(self.df)):
-            price = 0
-            if ((balance >= self.df['<CLOSE>'][i]) and (self.df["SMA"][i] >= self.df["bb_bbm"][i]) and (
-                    self.df["SMA"][i - 1] < self.df["bb_bbm"][i - 1])):
-                count += balance // self.df['<CLOSE>'][i]
-                price = self.df['<CLOSE>'][i] * count
-                balance = balance - price
-                k += price * 0.01
-                day_status.append('buy')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='green', s=78)
+            action = self.check_conditions_bb(i, balance, count) if i != 0 else 'nothing'
+            match action:
+                case 'buy':
+                    count += balance // self.df['<CLOSE>'][i]
+                    price = self.df['<CLOSE>'][i] * count
+                    balance = balance - price
+                    k += price * 0.01
+                    day_status.append('buy')
+                    self.df.at[i, 'Buy_Signal'] = True
 
-            elif count > 0 and (self.df["SMA"][i] <= self.df["bb_bbm"][i]) and (
-                    self.df["SMA"][i - 1] > self.df["bb_bbm"][i - 1]):
-                balance += count * self.df['<CLOSE>'][i]
-                k += count * self.df['<CLOSE>'][i] * 0.01
-                count = 0
-                price = self.df['<CLOSE>'][i]
-                day_status.append('sell')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='red', s=78)
+                case 'sell':
+                    balance += count * self.df['<CLOSE>'][i]
+                    k += count * self.df['<CLOSE>'][i] * 0.01
+                    count = 0
+                    price = self.df['<CLOSE>'][i]
+                    day_status.append('sell')
+                    self.df.at[i, 'Sell_Signal'] = True
 
-            else:
-                day_status.append('nothing')
+                case 'nothing':
+                    day_status.append('nothing')
 
             if i == (len(self.df) - 1):
                 if self.comission:
@@ -320,37 +333,66 @@ class Indicators:
             balance_df.append(balance)
             price_df.append(price)
 
-        BB["NumOfShares"] = count_df
-        BB["MoneySpent"] = price_df
-        BB["Balance"] = balance_df
-        BB["DayStatus"] = day_status
-        return BB
+        bb_df["NumOfShares"] = count_df
+        bb_df["MoneySpent"] = price_df
+        bb_df["Balance"] = balance_df
+        bb_df["DayStatus"] = day_status
+
+        if plot:
+            subplots_data = [
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'black'},
+                    ],
+                    'title': 'Цены закрытия акций',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#f0f0f0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'black'},
+                        {'x': self.df['<DATE>'], 'y': self.df['bb_bbm'], 'label': 'BB Middle', 'color': 'yellow'},
+                        {'x': self.df['<DATE>'], 'y': self.df['bb_bbh'], 'label': 'BB High', 'color': 'green'},
+                        {'x': self.df['<DATE>'], 'y': self.df['bb_bbl'], 'label': 'BB Low', 'color': 'red'},
+                        {'x': self.df['<DATE>'], 'y': self.df['SMA'], 'label': 'SMA', 'color': 'orange'}
+                    ],
+                    'title': 'Индикатор Bollinger Bands вместе с SMA',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#f0f0f0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'blue'}
+                    ],
+                    'scatter': [
+                        {'x': self.df[self.df['Buy_Signal']].index, 'y': self.df[self.df['Buy_Signal']]['<CLOSE>'],
+                         'label': 'Покупка', 'color': 'green', 'size': 100},
+                        {'x': self.df[self.df['Sell_Signal']].index, 'y': self.df[self.df['Sell_Signal']]['<CLOSE>'],
+                         'label': 'Продажа', 'color': 'red', 'size': 100}
+                    ],
+                    'title': 'Торговые сигналы на основе Bollinger Bands вместе с SMA',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                }
+            ]
+
+            plot_data_with_subplots(subplots_data)
+
+        return bb_df
 
     def psar(self, step=0.02, max_step=0.2, plot=True):
-        Psar = PSARIndicator(high=self.df["<HIGH>"], low=self.df["<LOW>"], close=self.df["<CLOSE>"], step=0.02,
-                             max_step=0.2)
-        self.df["PSARu"] = Psar.psar_up()
-        self.df["PSARd"] = Psar.psar_down()
-        if plot:
-            plt.figure(figsize=(40, 15), facecolor='#d8dcd6')
-            ax1 = plt.subplot2grid((8, 1), (0, 0), rowspan=5, colspan=1)
+        psar = PSARIndicator(high=self.df["<HIGH>"], low=self.df["<LOW>"], close=self.df["<CLOSE>"], step=step,
+                             max_step=max_step)
+        self.df["PSARu"] = psar.psar_up()
+        self.df["PSARd"] = psar.psar_down()
 
-            ax1.plot(self.df['<DATE>'], self.df['<CLOSE>'], label='Close', color='black')
-            ax1.scatter(self.df['<DATE>'], self.df['PSARu'], label='PSAR Up')
-            ax1.scatter(self.df['<DATE>'], self.df['PSARd'], label='PSAR Down')
-
-            ax1.set_title('PSAR Indicator')
-            ax1.legend(loc='best')
-            ax1.grid(True)
-            ax1.set_facecolor('#d8dcd6')
-
-            fig, ax = plt.subplots(facecolor="#d8dcd6", figsize=(40, 15))
-            plt.plot(self.df['<DATE>'], self.df["<CLOSE>"])
-
-            ax.set_facecolor('#d8dcd6')
-            ax.grid(True)
-
-        PSARdf = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
+        psar_df = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
         balance = self.balance
         price = 0
         count = 0
@@ -358,30 +400,26 @@ class Indicators:
         balance_df, count_df, price_df, day_status = [], [], [], []
 
         for i in range(len(self.df)):
-            price = 0
-            if i == 0:
-                day_status.append('nothing')
-            elif ((balance >= self.df['<CLOSE>'][i]) and (
-                    pd.isna(self.df["PSARd"][i]) == True and pd.isna(self.df["PSARd"][i - 1]) == False)):
-                count += balance // self.df['<CLOSE>'][i]
-                price = self.df['<CLOSE>'][i] * count
-                balance = balance - price
-                k += price * 0.01
-                day_status.append('buy')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='green', s=78)
+            action = self.check_conditions_psar(i, balance, count) if i != 0 else 'nothing'
+            match action:
+                case 'buy':
+                    count += balance // self.df['<CLOSE>'][i]
+                    price = self.df['<CLOSE>'][i] * count
+                    balance = balance - price
+                    k += price * 0.01
+                    day_status.append('buy')
+                    self.df.at[i, 'Buy_Signal'] = True
 
-            elif count > 0 and (pd.isna(self.df["PSARu"][i]) == True and pd.isna(self.df["PSARu"][i - 1]) == False):
-                balance += count * self.df['<CLOSE>'][i]
-                k += count * self.df['<CLOSE>'][i] * 0.01
-                count = 0
-                price = self.df['<CLOSE>'][i]
-                day_status.append('sell')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='red', s=78)
+                case 'sell':
+                    balance += count * self.df['<CLOSE>'][i]
+                    k += count * self.df['<CLOSE>'][i] * 0.01
+                    count = 0
+                    price = self.df['<CLOSE>'][i]
+                    day_status.append('sell')
+                    self.df.at[i, 'Sell_Signal'] = True
 
-            else:
-                day_status.append('nothing')
+                case 'nothing':
+                    day_status.append('nothing')
 
             if i == (len(self.df) - 1):
                 if self.comission:
@@ -397,38 +435,61 @@ class Indicators:
             balance_df.append(balance)
             price_df.append(price)
 
-        PSARdf["NumOfShares"] = count_df
-        PSARdf["MoneySpent"] = price_df
-        PSARdf["Balance"] = balance_df
-        PSARdf["DayStatus"] = day_status
-        return PSARdf
+        psar_df["NumOfShares"] = count_df
+        psar_df["MoneySpent"] = price_df
+        psar_df["Balance"] = balance_df
+        psar_df["DayStatus"] = day_status
+
+        if plot:
+            subplots_data = [
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'black'}
+                    ],
+                    'title': 'Цены закрытия акций',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#f0f0f0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'black'},
+                        {'x': self.df['<DATE>'], 'y': self.df['PSARu'], 'label': 'PSAR Up', 'color': 'blue'},
+                        {'x': self.df['<DATE>'], 'y': self.df['PSARd'], 'label': 'PSAR Down', 'color': 'orange'}
+                    ],
+                    'title': 'Индикатор PSAR',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Stochastic',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'blue'}
+                    ],
+                    'scatter': [
+                        {'x': self.df[self.df['Buy_Signal']].index, 'y': self.df[self.df['Buy_Signal']]['<CLOSE>'],
+                         'label': 'Покупка', 'color': 'green', 'size': 100},
+                        {'x': self.df[self.df['Sell_Signal']].index, 'y': self.df[self.df['Sell_Signal']]['<CLOSE>'],
+                         'label': 'Продажа', 'color': 'red', 'size': 100}
+                    ],
+                    'title': 'Торговые сигналы на основе PSAR',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                }
+            ]
+
+            plot_data_with_subplots(subplots_data)
+
+        return psar_df
 
     def rsi(self, plot=True):
         self.df["RSI"] = RSIIndicator(self.df['<CLOSE>'], 10).rsi()
-        if plot:
-            plt.figure(figsize=(40, 15), facecolor='#d8dcd6')
-            ax1 = plt.subplot2grid((8, 1), (0, 0), rowspan=5, colspan=1)
-            ax2 = plt.subplot2grid((8, 1), (5, 0), rowspan=3, colspan=1)
 
-            ax1.plot(self.df['<DATE>'], self.df['<CLOSE>'], label='Close', color='black')
-            ax2.plot(self.df['<DATE>'], self.df['RSI'], label='RSI Indicator')
-
-            ax1.set_title('RSI Indicator')
-            ax1.legend(loc='best')
-            ax2.legend(loc='best')
-
-            ax1.grid(True)
-            ax2.grid(True)
-
-            ax1.set_facecolor('#d8dcd6')
-            ax2.set_facecolor('#d8dcd6')
-
-            fig, ax = plt.subplots(facecolor="#d8dcd6", figsize=(40, 15))
-            plt.plot(self.df['<DATE>'], self.df["<CLOSE>"])
-            ax.set_facecolor('#d8dcd6')
-            ax.grid(True)
-
-        RSIdf = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
+        rsi_df = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
         balance = self.balance
         price = 0
         count = 0
@@ -436,29 +497,26 @@ class Indicators:
         balance_df, count_df, price_df, day_status = [], [], [], []
 
         for i in range(len(self.df)):
-            price = 0
-            if i == 0:
-                day_status.append('nothing')
-            elif ((balance >= self.df['<CLOSE>'][i]) and (self.df["RSI"][i] < 30 and self.df["RSI"][i - 1] > 30)):
-                count += balance // self.df['<CLOSE>'][i]
-                price = self.df['<CLOSE>'][i] * count
-                balance = balance - price
-                k += price * 0.01
-                day_status.append('buy')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='green', s=78)
+            action = self.check_conditions_rsi(i, balance, count) if i != 0 else 'nothing'
+            match action:
+                case 'buy':
+                    count += balance // self.df['<CLOSE>'][i]
+                    price = self.df['<CLOSE>'][i] * count
+                    balance = balance - price
+                    k += price * 0.01
+                    day_status.append('buy')
+                    self.df.at[i, 'Buy_Signal'] = True
 
-            elif count > 0 and (self.df["RSI"][i] > 70):
-                balance += count * self.df['<CLOSE>'][i]
-                k += count * self.df['<CLOSE>'][i] * 0.01
-                count = 0
-                price = self.df['<CLOSE>'][i]
-                day_status.append('sell')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='red', s=78)
+                case 'sell':
+                    balance += count * self.df['<CLOSE>'][i]
+                    k += count * self.df['<CLOSE>'][i] * 0.01
+                    count = 0
+                    price = self.df['<CLOSE>'][i]
+                    day_status.append('sell')
+                    self.df.at[i, 'Sell_Signal'] = True
 
-            else:
-                day_status.append('nothing')
+                case 'nothing':
+                    day_status.append('nothing')
 
             if i == (len(self.df) - 1):
                 if self.comission:
@@ -474,54 +532,65 @@ class Indicators:
             balance_df.append(balance)
             price_df.append(price)
 
-        RSIdf["NumOfShares"] = count_df
-        RSIdf["MoneySpent"] = price_df
-        RSIdf["Balance"] = balance_df
-        RSIdf["DayStatus"] = day_status
-        return RSIdf
+        rsi_df["NumOfShares"] = count_df
+        rsi_df["MoneySpent"] = price_df
+        rsi_df["Balance"] = balance_df
+        rsi_df["DayStatus"] = day_status
+        
+        if plot:
+            subplots_data = [
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'black'}
+                    ],
+                    'title': 'Цены закрытия акций',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#f0f0f0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['RSI'], 'label': 'RSI Indicator', 'color': 'red'}
+                    ],
+                    'title': 'Индикатор RSI',
+                    'xlabel': 'Дата',
+                    'ylabel': 'IVAR',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'blue'}
+                    ],
+                    'scatter': [
+                        {'x': self.df[self.df['Buy_Signal']].index, 'y': self.df[self.df['Buy_Signal']]['<CLOSE>'],
+                         'label': 'Покупка', 'color': 'green', 'size': 100},
+                        {'x': self.df[self.df['Sell_Signal']].index, 'y': self.df[self.df['Sell_Signal']]['<CLOSE>'],
+                         'label': 'Продажа', 'color': 'red', 'size': 100}
+                    ],
+                    'title': 'Торговые сигналы на основе RSI',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                }
+            ]
+
+            plot_data_with_subplots(subplots_data)
+        
+        return rsi_df
 
     def stochastic(self, window_fast=11, window_slow=27, window_sign=9, plot=True):
-        St = StochasticOscillator(high=self.df["<HIGH>"], low=self.df["<LOW>"], close=self.df["<CLOSE>"])
-        self.df["Stoch"] = St.stoch()
-        self.df["StochSig"] = St.stoch_signal()
-        _MACD = MACD(self.df["<CLOSE>"], window_fast=11, window_slow=27, window_sign=9)
+        stochastic = StochasticOscillator(high=self.df["<HIGH>"], low=self.df["<LOW>"], close=self.df["<CLOSE>"])
+        self.df["Stoch"] = stochastic.stoch()
+        self.df["StochSig"] = stochastic.stoch_signal()
+        _MACD = MACD(self.df["<CLOSE>"], window_fast=window_fast, window_slow=window_slow, window_sign=window_sign)
         self.df["MACD"] = _MACD.macd()
         self.df["MACD_signal"] = _MACD.macd_signal()
         self.df["MACD_gist"] = _MACD.macd_diff()
 
-        if plot:
-            plt.figure(figsize=(40, 15), facecolor='#d8dcd6')
-            ax1 = plt.subplot2grid((11, 1), (0, 0), rowspan=5, colspan=1)
-            ax2 = plt.subplot2grid((11, 1), (5, 0), rowspan=3, colspan=1)
-            ax3 = plt.subplot2grid((11, 1), (8, 0), rowspan=3, colspan=1)
-
-            ax1.plot(self.df['<DATE>'], self.df['<CLOSE>'], label='Close', color='black')
-
-            ax2.plot(self.df['<DATE>'], self.df['Stoch'], label='Stochastic Oscillator')
-            ax2.plot(self.df['<DATE>'], self.df['StochSig'], label='Signal Stochastic Oscillator')
-
-            ax3.plot(self.df['<DATE>'], self.df['MACD_signal'], label='Signal line')
-            ax3.plot(self.df['<DATE>'], self.df['MACD'], label='MACD line')
-
-            axs = [ax1, ax2, ax3]
-            for i in range(len(self.df)):
-                if str(self.df['MACD_gist'][i])[0] == '-':
-                    ax3.bar(self.df['<DATE>'][i], self.df['MACD_gist'][i], color='#ef5350', )
-                else:
-                    ax3.bar(self.df['<DATE>'][i], self.df['MACD_gist'][i], color='#26a69a')
-
-            ax1.set_title('Stochastic')
-            for i in axs:
-                i.legend(loc='best')
-                i.grid(True)
-                i.set_facecolor('#d8dcd6')
-
-            fig, ax = plt.subplots(facecolor="#d8dcd6", figsize=(40, 15))
-            plt.plot(self.df['<DATE>'], self.df["<CLOSE>"])
-            ax.set_facecolor('#d8dcd6')
-            ax.grid(True)
-
-        Stochdf = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
+        stochastic_df = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
         balance = self.balance
         price = 0
         count = 0
@@ -529,31 +598,26 @@ class Indicators:
         balance_df, count_df, price_df, day_status = [], [], [], []
 
         for i in range(len(self.df)):
-            price = 0
-            if i == 0:
-                day_status.append('nothing')
-            elif ((balance >= self.df['<CLOSE>'][i]) and (
-                    self.df["MACD_gist"][i] > 0 and self.df["StochSig"][i] > 80 and self.df["StochSig"][i - 1] < 80)):
-                count += balance // self.df['<CLOSE>'][i]
-                price = self.df['<CLOSE>'][i] * count
-                balance = balance - price
-                k += price * 0.01
-                day_status.append('buy')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='green', s=78)
+            action = self.check_conditions_stochastic(i, balance, count) if i != 0 else 'nothing'
+            match action:
+                case 'buy':
+                    count += balance // self.df['<CLOSE>'][i]
+                    price = self.df['<CLOSE>'][i] * count
+                    balance = balance - price
+                    k += price * 0.01
+                    day_status.append('buy')
+                    self.df.at[i, 'Buy_Signal'] = True
 
-            elif count > 0 and (
-                    self.df["MACD_gist"][i] < 0 and self.df["StochSig"][i] < 20 and self.df["StochSig"][i - 1] > 20):
-                balance += count * self.df['<CLOSE>'][i]
-                k += count * self.df['<CLOSE>'][i] * 0.01
-                count = 0
-                price = self.df['<CLOSE>'][i]
-                day_status.append('sell')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='red', s=78)
+                case 'sell':
+                    balance += count * self.df['<CLOSE>'][i]
+                    k += count * self.df['<CLOSE>'][i] * 0.01
+                    count = 0
+                    price = self.df['<CLOSE>'][i]
+                    day_status.append('sell')
+                    self.df.at[i, 'Sell_Signal'] = True
 
-            else:
-                day_status.append('nothing')
+                case 'nothing':
+                    day_status.append('nothing')
 
             if i == (len(self.df) - 1):
                 if self.comission:
@@ -569,11 +633,72 @@ class Indicators:
             balance_df.append(balance)
             price_df.append(price)
 
-        Stochdf["NumOfShares"] = count_df
-        Stochdf["MoneySpent"] = price_df
-        Stochdf["Balance"] = balance_df
-        Stochdf["DayStatus"] = day_status
-        return Stochdf
+        stochastic_df["NumOfShares"] = count_df
+        stochastic_df["MoneySpent"] = price_df
+        stochastic_df["Balance"] = balance_df
+        stochastic_df["DayStatus"] = day_status
+
+        if plot:
+            subplots_data = [
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'black'}
+                    ],
+                    'title': 'Цены закрытия акций',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#f0f0f0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['Stoch'], 'label': 'Stochastic Oscillator',
+                         'color': 'blue'},
+                        {'x': self.df['<DATE>'], 'y': self.df['StochSig'], 'label': 'Signal Stochastic Oscillator',
+                         'color': 'orange'}
+                    ],
+                    'title': 'Индикатор Stochastic',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Stochastic',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['MACD_signal'], 'label': 'Signal line', 'color': 'blue'},
+                        {'x': self.df['<DATE>'], 'y': self.df['MACD'], 'label': 'MACD line', 'color': 'orange'}
+                    ],
+                    'bar': [
+                        {'x': self.df['<DATE>'], 'y': self.df['MACD_gist'], 'label': 'MACD Histogram',
+                         'color': self.df['MACD_gist'].apply(lambda x: '#ef5350' if x < 0 else '#26a69a')}
+                    ],
+                    'title': 'Индикатор MACD',
+                    'xlabel': 'Дата',
+                    'ylabel': 'MACD',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'blue'}
+                    ],
+                    'scatter': [
+                        {'x': self.df[self.df['Buy_Signal']].index, 'y': self.df[self.df['Buy_Signal']]['<CLOSE>'],
+                         'label': 'Покупка', 'color': 'green', 'size': 100},
+                        {'x': self.df[self.df['Sell_Signal']].index, 'y': self.df[self.df['Sell_Signal']]['<CLOSE>'],
+                         'label': 'Продажа', 'color': 'red', 'size': 100}
+                    ],
+                    'title': 'Торговые сигналы на основе Stochastic',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                }
+            ]
+
+            plot_data_with_subplots(subplots_data)
+
+        return stochastic_df
 
     def ivar(self, window_size=10, plot=True):
         calc = [np.std(i) for i in self.df['<CLOSE>'].rolling(window=window_size)]
@@ -582,36 +707,13 @@ class Indicators:
         self.df['ivar'] = ivar_values
         self.df['flat_flag'] = flat_flag
 
-        if plot:
-            plt.figure(figsize=(40, 15), facecolor='#d8dcd6')
-            ax1 = plt.subplot2grid((8, 1), (0, 0), rowspan=5, colspan=1)
-            ax2 = plt.subplot2grid((8, 1), (5, 0), rowspan=3, colspan=1)
-
-            ax1.plot(self.df['<DATE>'], self.df['<CLOSE>'], label='Close', color='black')
-            ax2.plot(self.df['<DATE>'], self.df['ivar'], label='iVar')
-
-            ax1.set_title('iVar')
-            ax1.legend(loc='best')
-            ax2.legend(loc='best')
-
-            ax1.grid(True)
-            ax2.grid(True)
-
-            ax1.set_facecolor('#d8dcd6')
-            ax2.set_facecolor('#d8dcd6')
-
-            fig, ax = plt.subplots(facecolor="#d8dcd6", figsize=(40, 15))
-            plt.plot(self.df['<DATE>'], self.df["<CLOSE>"])
-            ax.set_facecolor('#d8dcd6')
-            ax.grid(True)
-
         indicator_bb = BollingerBands(close=self.df["<CLOSE>"], window=20, window_dev=2)
         self.df['bb_bbm'] = indicator_bb.bollinger_mavg()
         self.df['bb_bbh'] = indicator_bb.bollinger_hband()
         self.df['bb_bbl'] = indicator_bb.bollinger_lband()
         self.df["SMA"] = SMAIndicator(close=self.df["<CLOSE>"], window=2).sma_indicator()
 
-        Ivardf = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
+        ivar_df = pd.DataFrame(self.df[['<DATE>', '<CLOSE>']])
         balance = self.balance
         price = 0
         count = 0
@@ -619,29 +721,26 @@ class Indicators:
         balance_df, count_df, price_df, day_status = [], [], [], []
 
         for i in range(len(self.df)):
-            price = 0
-            if ((balance >= self.df['<CLOSE>'][i]) and (self.df["SMA"][i] >= self.df["bb_bbm"][i]) and (
-                    self.df["SMA"][i - 1] < self.df["bb_bbm"][i - 1])) and self.df['flat_flag'][i] == 0:
-                count += balance // self.df['<CLOSE>'][i]
-                price = self.df['<CLOSE>'][i] * count
-                balance = balance - price
-                k += price * 0.01
-                day_status.append('buy')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='green', s=78)
+            action = self.check_conditions_ivar(i, balance, count) if i != 0 else 'nothing'
+            match action:
+                case 'buy':
+                    count += balance // self.df['<CLOSE>'][i]
+                    price = self.df['<CLOSE>'][i] * count
+                    balance -= price
+                    k += price * 0.01
+                    day_status.append('buy')
+                    self.df.at[i, 'Buy_Signal'] = True
 
-            elif count > 0 and (self.df["SMA"][i] <= self.df["bb_bbm"][i]) and (
-                    self.df["SMA"][i - 1] > self.df["bb_bbm"][i - 1]) and self.df['flat_flag'][i] == 0:
-                balance += count * self.df['<CLOSE>'][i]
-                k += count * self.df['<CLOSE>'][i] * 0.01
-                count = 0
-                price = self.df['<CLOSE>'][i]
-                day_status.append('sell')
-                if plot:
-                    plt.scatter(self.df['<DATE>'][i], self.df['<CLOSE>'][i], c='red', s=78)
+                case 'sell':
+                    balance += count * self.df['<CLOSE>'][i]
+                    k += count * self.df['<CLOSE>'][i] * 0.01
+                    count = 0
+                    price = self.df['<CLOSE>'][i]
+                    day_status.append('sell')
+                    self.df.at[i, 'Sell_Signal'] = True
 
-            else:
-                day_status.append('nothing')
+                case 'nothing':
+                    day_status.append('nothing')
 
             if i == (len(self.df) - 1):
                 if self.comission:
@@ -657,11 +756,54 @@ class Indicators:
             balance_df.append(balance)
             price_df.append(price)
 
-        Ivardf["NumOfShares"] = count_df
-        Ivardf["MoneySpent"] = price_df
-        Ivardf["Balance"] = balance_df
-        Ivardf["DayStatus"] = day_status
-        return Ivardf
+        ivar_df["NumOfShares"] = count_df
+        ivar_df["MoneySpent"] = price_df
+        ivar_df["Balance"] = balance_df
+        ivar_df["DayStatus"] = day_status
+
+        if plot:
+            subplots_data = [
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'black'}
+                    ],
+                    'title': 'Цены закрытия акций',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#f0f0f0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['ivar'], 'label': 'IVAR', 'color': 'red'}
+                    ],
+                    'title': 'Индикатор IVAR',
+                    'xlabel': 'Дата',
+                    'ylabel': 'IVAR',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                },
+                {
+                    'lines': [
+                        {'x': self.df['<DATE>'], 'y': self.df['<CLOSE>'], 'label': 'Цена закрытия', 'color': 'blue'}
+                    ],
+                    'scatter': [
+                        {'x': self.df[self.df['Buy_Signal']].index, 'y': self.df[self.df['Buy_Signal']]['<CLOSE>'],
+                         'label': 'Покупка', 'color': 'green', 'size': 100},
+                        {'x': self.df[self.df['Sell_Signal']].index, 'y': self.df[self.df['Sell_Signal']]['<CLOSE>'],
+                         'label': 'Продажа', 'color': 'red', 'size': 100}
+                    ],
+                    'title': 'Торговые сигналы на основе Ivar',
+                    'xlabel': 'Дата',
+                    'ylabel': 'Цена закрытия',
+                    'grid': True,
+                    'facecolor': '#e0e0e0'
+                }
+            ]
+
+            plot_data_with_subplots(subplots_data)
+
+        return ivar_df
 
     def _buy_and_hold(self):
         balance = self.balance
@@ -669,7 +811,6 @@ class Indicators:
         price = self.df['<CLOSE>'][0] * count
         remaining = balance - price
 
-        # last selling
         result = remaining + count * self.df['<CLOSE>'].values[-1]
         profit = result / balance - 1
         return np.round(profit, 4)
@@ -678,12 +819,12 @@ class Indicators:
         strategies = {
             'MACD+AROON': self.macd_aroon,
             'ATR+AROON': self.atr_aroon,
-            'BB': self.bolinger_bands,
+            'BB': self.bollinger_bands,
             'PSAR': self.psar,
             'RSI': self.rsi,
             'Stochastic': self.stochastic,
             'Ivar': self.ivar,
-            'buy and hold': self._buy_and_hold
+            # 'buy and hold': self._buy_and_hold
         }
         profitabilities = pd.DataFrame()
         profitabilities[''] = ['profitability, %']
@@ -717,8 +858,154 @@ class Indicators:
         else:
             rec_move = 'Удерживать'
         print(f"Рекоммендуемое действие: {rec_move}")
-        plt.savefig('best_solution', dpi = 100)
         return profitabilities.style.map(colormap)
+    
+    def check_conditions_rsi(self, i, balance, count):
+        close = self.df['<CLOSE>'][i]
+        rsi_current = self.df["RSI"][i]
+        rsi_previous = self.df["RSI"][i - 1]
+        
+        if balance > close and rsi_current < 30 < rsi_previous:
+            return 'buy'
+        elif count > 0 and rsi_current > 70:
+            return 'sell'
+        else:
+            return 'nothing'        
+    
+    def check_conditions_atr_aroon(self, i, balance, count):
+        close = self.df['<CLOSE>'][i]
+        aroond_current = self.df['AROONd'][i]
+        aroonu_current = self.df['AROONu'][i]
+        atr_current = self.df["ATR"][i]
+        atr_previous = self.df["ATR"][i - 1]
+        smaatr_current = self.df["SMAATR"][i]
+        smaatr_previous = self.df["SMAATR"][i - 1]
+
+        if aroond_current <= 30 and aroonu_current >= 60:
+            trend = 'up'
+        elif aroonu_current <= 30 and aroond_current >= 60:
+            trend = 'down'
+        else:
+            trend = None
+
+        if balance > close and atr_current >= smaatr_current and trend == 'down':
+            return 'buy'
+        elif count > 0 and atr_current >= smaatr_current and atr_previous < smaatr_previous and trend == 'up':
+            return 'sell'
+        else:
+            return 'nothing'
+
+    def check_conditions_macd_aroon(self, i, balance, count):
+        close = self.df['<CLOSE>'][i]
+        aroond_current = self.df['AROONd'][i]
+        aroonu_current = self.df['AROONu'][i]
+        macd_current = self.df['MACD_gist'][i]
+
+        if aroond_current <= 30 and aroonu_current >= 60:
+            trend = 'up'
+        elif aroonu_current <= 30 and aroond_current >= 60:
+            trend = 'down'
+        else:
+            trend = None
+
+        if balance >= close and macd_current > 0 and trend == 'up':
+            return 'buy'
+        elif count > 0 > macd_current and trend == 'down':
+            return 'sell'
+        else:
+            return 'nothing'
+
+    def check_conditions_psar(self, i, balance, count):
+        close = self.df['<CLOSE>'][i]
+        psard_current = self.df["PSARd"][i]
+        psard_previous = self.df["PSARd"][i - 1]
+        psaru_current = self.df["PSARu"][i]
+        psaru_previous = self.df["PSARu"][i - 1]
+
+        if balance >= close and pd.isna(psard_current) and not pd.isna(psard_previous):
+            return 'buy'
+        elif count > 0 and pd.isna(psaru_current) and not pd.isna(psaru_previous):
+            return 'sell'
+        else:
+            return 'nothing'
+
+    def check_conditions_bb(self, i, balance, count):
+        close = self.df['<CLOSE>'][i]
+        sma_current = self.df["SMA"][i]
+        sma_previous = self.df["SMA"][i - 1]
+        bb_current = self.df["bb_bbm"][i]
+        bb_previous = self.df["bb_bbm"][i - 1]
+
+        if balance >= close and sma_current >= bb_current and sma_previous < bb_previous:
+            return 'buy'
+        elif count > 0 and sma_current <= bb_current and sma_previous > bb_previous:
+            return 'sell'
+        else:
+            return 'nothing'
+
+    def check_conditions_stochastic(self, i, balance, count):
+        close = self.df['<CLOSE>'][i]
+        macd_current = self.df["MACD_gist"][i]
+        stochastic_current = self.df["StochSig"][i]
+        stochastic_previous = self.df["StochSig"][i - 1]
+
+        if balance >= close and macd_current > 0 and stochastic_current > 80 > stochastic_previous:
+            return 'buy'
+        elif count > 0 > macd_current and stochastic_current < 20 < stochastic_previous:
+            return 'sell'
+        else:
+            return 'nothing'
+
+    def check_conditions_ivar(self, i, balance, count):
+        close = self.df['<CLOSE>'][i]
+        sma_current = self.df["SMA"][i]
+        sma_previous = self.df["SMA"][i - 1]
+        bbm_current = self.df["bb_bbm"][i]
+        bbm_previous = self.df["bb_bbm"][i - 1]
+        flat_flag = self.df['flat_flag'][i]
+
+        if balance >= close and sma_current >= bbm_current and sma_previous < bbm_previous and flat_flag == 0:
+            return 'buy'
+        elif count > 0 and sma_current <= bbm_current and sma_previous > bbm_previous and flat_flag == 0:
+            return 'sell'
+        else:
+            return 'nothing'
+
+
+def plot_data_with_subplots(subplots_data, figure_size=(12, 8), main_xlabel='X-axis',
+                            main_ylabel='Y-axis', legend=True, facecolor='#d8dcd6', save_plots=True):
+    for subplot_index, subplot_data in enumerate(subplots_data):
+        fig, ax = plt.subplots(nrows=1, ncols=1, figsize=figure_size, facecolor=facecolor)
+
+        for line_data in subplot_data.get('lines', []):
+            ax.plot(line_data['x'], line_data['y'], label=line_data.get('label', None),
+                    color=line_data.get('color', 'black'))
+
+        for scatter_data in subplot_data.get('scatter', []):
+            ax.scatter(scatter_data['x'], scatter_data['y'], label=scatter_data.get('label', None),
+                       color=scatter_data.get('color', 'black'), s=scatter_data.get('size', 50))
+
+        for bar_data in subplot_data.get('bar', []):
+            ax.bar(bar_data['x'], bar_data['y'], label=bar_data.get('label', None),
+                   color=bar_data.get('color', 'black'), width=bar_data.get('width', 0.8))
+
+        ax.set_title(subplot_data.get('title', ''))
+        ax.set_xlabel(subplot_data.get('xlabel', main_xlabel))
+        ax.set_ylabel(subplot_data.get('ylabel', main_ylabel))
+
+        if legend and 'lines' in subplot_data and any('label' in line for line in subplot_data['lines']):
+            ax.legend(loc='best')
+
+        ax.grid(subplot_data.get('grid', True))
+        ax.set_facecolor(subplot_data.get('facecolor', '#d8dcd6'))
+
+        plt.tight_layout(pad=3.0)
+
+        if save_plots:
+            fig.savefig(f'subplot_{subplot_index}.png', dpi=100)
+
+        plt.show(block=False)
+    plt.show(block=True)
 
 
 def main():
