@@ -16,6 +16,7 @@ import requests
 import apimoex
 import datetime
 from dateutil.parser import parse
+from logger_TC import Logger
 
 
 def get_tickers():
@@ -26,7 +27,7 @@ def get_tickers():
 
 
 class Indicators:
-    def __init__(self, ticker, date, interval='day', days=365, balance=10 ** 5,
+    def __init__(self, logger, ticker, date, interval='day', days=365, balance=10 ** 5,
                  comission=False):
         if interval == 'day':
             self.interval = 24
@@ -49,6 +50,9 @@ class Indicators:
                                       volume="<VOL>", fillna=True)
         self.df['Buy_Signal'] = False
         self.df['Sell_Signal'] = False
+        logger.log_start()
+        logger.log_settings(ticker, date, balance, interval, days)
+
 
     def macd_aroon(self, window_fast=11, window_slow=27, window_sign=9, lb=25, plot=True):
         _MACD = MACD(self.df["<CLOSE>"], window_fast=window_fast, window_slow=window_slow, window_sign=window_sign)
@@ -858,6 +862,7 @@ class Indicators:
         else:
             rec_move = 'Удерживать'
         print(f"Рекоммендуемое действие: {rec_move}")
+        np.savetxt(r'np.txt', df.values, fmt='%s')
         return profitabilities.style.map(colormap)
     
     def check_conditions_rsi(self, i, balance, count):
@@ -1009,9 +1014,10 @@ def plot_data_with_subplots(subplots_data, figure_size=(12, 8), main_xlabel='X-a
 
 
 def main():
-    res = Indicators('GAZP', '06.08.2020', balance=100000, interval='day', days=365)
+    log = Logger('logger_info')
+    res = Indicators(log,'GAZP', '06.08.2020', balance=100000, interval='day', days=365)
     res.best_solution()
-
+    log.log_end()
 
 if __name__ == '__main__':
     main()
