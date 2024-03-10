@@ -1,0 +1,7 @@
+image: atlassian/default-image:latest
+
+pipelines:
+  default:
+    - step:
+        script:
+          - git push https://<username>:${GitHub_token}@https://github.com/UznikiKoda/TradingConsulter.git
