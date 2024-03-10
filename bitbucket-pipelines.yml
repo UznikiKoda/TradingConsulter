@@ -4,4 +4,4 @@ pipelines:
   default:
     - step:
         script:
-          - git push https://Badchimbay:${GitHub_token}@https://github.com/UznikiKoda/TradingConsulter.git
+          - git push https://Badchimbay:${GitHub_token}@github.com/UznikiKoda/TradingConsulter.git
