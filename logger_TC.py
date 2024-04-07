@@ -33,7 +33,7 @@ class Logger:
     @staticmethod
     def log_error(error_message):
         logging.error(f"Ошибка: {error_message}")
-
+        #222222
     def log_postgres(self, ticker, date_time, balance, interval, days):
         self.cursor.execute("""
                    INSERT INTO public.logs
