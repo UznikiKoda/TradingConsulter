@@ -17,6 +17,10 @@ import apimoex
 import datetime
 from dateutil.parser import parse
 from logger_TC import Logger
+import os
+from dotenv import load_dotenv
+import psycopg2
+
 
 
 def get_tickers():
@@ -52,6 +56,7 @@ class Indicators:
         self.df['Sell_Signal'] = False
         logger.log_start()
         logger.log_settings(ticker, date, balance, interval, days)
+        logger.log_postgres(ticker, date, balance , interval, days)
 
 
     def macd_aroon(self, window_fast=11, window_slow=27, window_sign=9, lb=25, plot=True):
@@ -1014,7 +1019,8 @@ def plot_data_with_subplots(subplots_data, figure_size=(12, 8), main_xlabel='X-a
 
 
 def main():
-    log = Logger('logger_info')
+    load_dotenv()
+    log = Logger(host=os.getenv('host'), db=os.getenv('database'), user=os.getenv('user'), password=os.getenv('password'),port=os.getenv('port') )
     res = Indicators(log,'GAZP', '06.08.2020', balance=100000, interval='day', days=365)
     res.best_solution()
     log.log_end()

@@ -9,8 +9,8 @@ services:
       - db-data:/var/lib/postgresql/data
       - ./db/migrations:/docker-entrypoint-initdb.d
     environment:
-      - POSTGRES_DB=trade
-      - POSTGRES_USER=postgres
+      - POSTGRES_DB=${database}
+      - POSTGRES_USER=${user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     ports:
       - 5432:5432
