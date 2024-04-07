@@ -1,12 +1,15 @@
 import logging
 import time
+import psycopg2
 
 
 class Logger:
-    def __init__(self, log_file):
-        logging.basicConfig(filename=log_file, level=logging.INFO, format='%(asctime)s - %(message)s',
+    def __init__(self, host, db, user, password, port):
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s',
                             datefmt='%Y-%m-%dT%H:%M:%S%z', encoding='utf8')
         self.start_time = time.time()
+        self.conn = psycopg2.connect(host=host, dbname=db, user=user, password=password, port=port)
+        self.cursor = self.conn.cursor()
 
     @staticmethod
     def log_start():
@@ -32,3 +35,12 @@ class Logger:
     @staticmethod
     def log_error(error_message):
         logging.error(f"Ошибка: {error_message}")
+
+    def log_postgres(self, ticker, date_time, balance, interval, days):
+        #duration = (end_time - start_time).total_seconds()
+        self.cursor.execute("""
+                   INSERT INTO public.logs
+                   (ticker, date_time, balance , interval, days)
+                   VALUES (%s, %s, %s, %s, %s)
+           """,  (ticker, date_time, balance, interval, days))
+        self.conn.commit()
