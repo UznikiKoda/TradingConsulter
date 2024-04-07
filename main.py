@@ -1020,7 +1020,7 @@ def plot_data_with_subplots(subplots_data, figure_size=(12, 8), main_xlabel='X-a
 
 def main():
     load_dotenv()
-    log = Logger(host=os.getenv('host'), db=os.getenv('database'), user=os.getenv('user'), password=os.getenv('password'),port=os.getenv('port') )
+    log = Logger(host=os.getenv('HOST'), db=os.getenv('DATABASE'), user=os.getenv('USER'), password=os.getenv('POSTGRES_PASSWORD'),port=os.getenv('PORT'))
     res = Indicators(log,'GAZP', '06.08.2020', balance=100000, interval='day', days=365)
     res.best_solution()
     log.log_end()
