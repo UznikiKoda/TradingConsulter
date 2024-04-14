@@ -7,7 +7,7 @@ services:
     user: postgres
     volumes:
       - db-data:/var/lib/postgresql/data
-      - ./db/migrations:/docker-entrypoint-initdb.d
+      - ./migrations/init:/docker-entrypoint-initdb.d
     environment:
       - POSTGRES_DB=${DATABASE}
       - POSTGRES_USER=${USER}
